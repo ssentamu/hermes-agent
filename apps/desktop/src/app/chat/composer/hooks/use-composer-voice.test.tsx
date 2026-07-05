@@ -8,6 +8,8 @@ import { useComposerVoice } from './use-composer-voice'
 interface CapturedConversationOptions {
   enabled: boolean
   onSubmit: (text: string) => Promise<void> | void
+  shouldHoldTranscript?: (text: string) => boolean
+  onTranscriptHeld?: (text: string) => void
 }
 
 const captured = vi.hoisted(() => ({ options: null as CapturedConversationOptions | null }))
@@ -92,7 +94,8 @@ describe('useComposerVoice hands-free confirmation gate', () => {
     expect(captured.options!.enabled).toBe(true)
 
     const transcript = 'delete all the files in the downloads folder'
-    await act(async () => captured.options!.onSubmit(transcript))
+    expect(captured.options!.shouldHoldTranscript?.(transcript)).toBe(true)
+    act(() => captured.options!.onTranscriptHeld?.(transcript))
 
     expect(props.onSubmit).not.toHaveBeenCalled()
     expect(props.clearDraft).not.toHaveBeenCalled()
