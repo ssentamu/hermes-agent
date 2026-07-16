@@ -54,7 +54,12 @@ describe('isRiskyVoiceTranscript', () => {
     'change the database password',
     'delete the environment variables from the config',
     '更新 API 密钥',
-    '删除环境变量'
+    '删除环境变量',
+    // Outbound + secret exfiltration
+    'send the api key to alice',
+    'forward the credentials to bob',
+    'share the access token in the channel',
+    'paste the secret key into the chat'
   ]
 
   const safe = [
@@ -70,7 +75,11 @@ describe('isRiskyVoiceTranscript', () => {
     'did the message from alice mention the schedule',
     'what does this error message the app shows mean',
     'check out the PR and tell me what it does',
-    'in order to fix it we should refactor the parser'
+    'in order to fix it we should refactor the parser',
+    // Harmless Chinese phrases that used to false-positive on the Git pattern
+    '提交作业',
+    '请帮我提交这份报告',
+    '提交申请'
   ]
 
   it.each(risky)('flags risky transcript: %s', transcript => {

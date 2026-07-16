@@ -30,6 +30,10 @@ const RISKY_PATTERNS: RegExp[] = [
   /\b(?:send|forward|shoot)\b.{0,50}\b(?:e-?mails?|messages?|dms?|texts?|sms|slack|tweets?|replies|invoices?)\b/,
   /\b(?:email|text|dm|ping|slack)\s+(?:him|her|them|everyone|the\s+\w+|[\w.]+@)/,
   /\bmessage\s+(?:him|her|them|everyone|[\w.]+@)/,
+  // Outbound + secret exfiltration — "send the API key to …" slips past
+  // the mail/message-noun rule above because the target is a secret, not a
+  // channel noun, and the secrets rule below doesn't include "send".
+  /\b(?:send|forward|share|paste|post|upload|copy)\b.{0,60}\b(?:api\s*keys?|tokens?|credentials?|passwords?|secrets?|secret\s+keys?|private\s+keys?|access\s+keys?)\b/,
   // Spending money and subscription changes. Carve out everyday phrases.
   /\b(?:buy|purchase|pay(?!\s+attention)|transfer|wire|venmo|checkout)\b.{0,60}\b(?:licen[cs]es?|domains?|plans?|subscriptions?|credits?|servers?|invoices?|bills?|money|dollars?|vendors?|versions?|it|this|that|one)\b/,
   /\b(?<!in\s)order\b.{0,60}\b(?:licen[cs]es?|domains?|plans?|subscriptions?|credits?|servers?|invoices?|bills?|it|this|that|one)\b/,
@@ -39,7 +43,9 @@ const RISKY_PATTERNS: RegExp[] = [
   /\b(?:rotate|revoke|regenerate|delete|remove|change|update|set|edit)\b.{0,50}\b(?:secrets?|api ?keys?|tokens?|credentials?|passwords?|environment variables?|env (?:vars?|variables?|files?)|\.env)\b/,
   // Chinese high-risk transcripts (zh locale support; broad by design).
   /(?:删除|移除|清空|擦除|格式化|覆盖).{0,20}(?:文件|文件夹|目录|硬盘|驱动器|垃圾箱|数据库|表|备份|环境变量|配置|仓库|分支|所有)/,
-  /(?:git\s*)?(?:提交|推送|重置|强推).{0,20}(?:git|代码|更改|分支|main|master|远程|仓库)?/,
+  // Git commands: require EITHER a "git " prefix OR a concrete repo/branch/remote
+  // target so harmless everyday speech like 提交作业 (submit homework) is not held.
+  /(?:git\s*(?:提交|推送|重置|强推)|(?:提交|推送|重置|强推).{0,20}(?:git|代码|更改|分支|main|master|远程|仓库))/,
   /(?:部署|发布|上线|发版).{0,20}(?:生产|线上|网站|应用|版本|npm|商店|这个|现在)?/,
   /(?:发邮件|发送邮件|发短信|发消息|私信|通知).{0,20}(?:客户|团队|他|她|他们|所有人|用户)/,
   /(?:客户|团队|他|她|他们|所有人|用户).{0,20}(?:发邮件|发送邮件|发短信|发消息|私信|通知)/,
