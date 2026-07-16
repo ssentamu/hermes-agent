@@ -213,6 +213,77 @@ def test_merge_metadata_stamps_sm_source():
     assert "source" not in merged2
 
 
+def test_forget_memory_falls_back_to_document_delete_for_store_id():
+    from plugins.memory.supermemory import _SupermemoryClient
+
+    class NotFoundError(Exception):
+        status_code = 404
+
+    class FakeMemories:
+        def forget(self, **kwargs):
+            raise NotFoundError("Memory not found")
+
+    class FakeDocuments:
+        def __init__(self):
+            self.deleted = []
+
+        def delete(self, memory_id):
+            self.deleted.append(memory_id)
+
+    class FakeSDK:
+        def __init__(self):
+            self.memories = FakeMemories()
+            self.documents = FakeDocuments()
+
+    fake_sdk = FakeSDK()
+    client = _SupermemoryClient.__new__(_SupermemoryClient)
+    client._container_tag = "hermes"
+    client.__dict__["_client"] = fake_sdk
+
+    client.forget_memory("doc_123")
+
+    assert fake_sdk.documents.deleted == ["doc_123"]
+
+
+def test_forget_memory_retries_document_delete_while_processing(monkeypatch):
+    from plugins.memory.supermemory import _SupermemoryClient
+
+    class NotFoundError(Exception):
+        status_code = 404
+
+    class ConflictError(Exception):
+        status_code = 409
+
+    class FakeMemories:
+        def forget(self, **kwargs):
+            raise NotFoundError("Memory not found")
+
+    class FakeDocuments:
+        def __init__(self):
+            self.attempts = 0
+
+        def delete(self, memory_id):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise ConflictError("Document is still processing")
+
+    class FakeSDK:
+        def __init__(self):
+            self.memories = FakeMemories()
+            self.documents = FakeDocuments()
+
+    monkeypatch.setattr("plugins.memory.supermemory.time.sleep", lambda _seconds: None)
+
+    fake_sdk = FakeSDK()
+    client = _SupermemoryClient.__new__(_SupermemoryClient)
+    client._container_tag = "hermes"
+    client.__dict__["_client"] = fake_sdk
+
+    client.forget_memory("doc_123")
+
+    assert fake_sdk.documents.attempts == 2
+
+
 def test_on_memory_write_tracks_thread(provider):
     provider.on_memory_write("add", "memory", "Jordan likes concise docs")
     assert provider._write_thread is not None

@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -31,6 +32,7 @@ _VALID_SEARCH_MODES = ("hybrid", "memories", "documents")
 _DEFAULT_API_TIMEOUT = 5.0
 _MIN_CAPTURE_LENGTH = 10
 _MAX_ENTITY_CONTEXT_LENGTH = 1500
+_CLOUD_BASE_URL = "https://api.supermemory.ai"
 _CONVERSATIONS_URL = "https://api.supermemory.ai/v4/conversations"
 _API_KEY_URL = "http://app.supermemory.ai/integrations?connect=hermes"
 _TRIVIAL_RE = re.compile(
@@ -52,6 +54,15 @@ _DEFAULT_ENTITY_CONTEXT = (
     "Do not remember temporary intents, one-time tasks, assistant actions, implementation details, or in-progress status.\n\n"
     "When in doubt, store less."
 )
+
+
+def _supermemory_api_url(path: str) -> str:
+    """Return the Supermemory API URL, honoring local/self-hosted base_url."""
+    base_url = os.environ.get("SUPERMEMORY_BASE_URL", "").strip().rstrip("/") or _CLOUD_BASE_URL
+    if not path.startswith("/"):
+        path = "/" + path
+    return base_url + path
+
 
 
 def _default_config() -> dict:
@@ -283,12 +294,18 @@ class _SupermemoryClient:
         self._container_tag = container_tag
         self._search_mode = search_mode if search_mode in _VALID_SEARCH_MODES else _DEFAULT_SEARCH_MODE
         self._timeout = timeout
-        self._client = Supermemory(
-            api_key=api_key,
-            timeout=timeout,
-            max_retries=0,
-            default_headers={"x-sm-source": "hermes"},
-        )
+        client_kwargs = {
+            "api_key": api_key,
+            "timeout": timeout,
+            "max_retries": 0,
+            "default_headers": {"x-sm-source": "hermes"},
+        }
+        base_url = os.environ.get("SUPERMEMORY_BASE_URL", "")
+        if base_url:
+            client_kwargs["base_url"] = base_url
+            logger.info("Supermemory: using custom base_url %s", base_url)
+        self._client = Supermemory(**client_kwargs)
+        self._conversation_url = _supermemory_api_url("/v4/conversations")
 
     def _merge_metadata(self, metadata: Optional[dict]) -> dict:
         # sm_source routes Hermes writes into the "Hermes" Space in the Supermemory
@@ -364,7 +381,44 @@ class _SupermemoryClient:
 
     def forget_memory(self, memory_id: str, *, container_tag: Optional[str] = None) -> None:
         tag = container_tag or self._container_tag
-        self._client.memories.forget(container_tag=tag, id=memory_id)
+        try:
+            self._client.memories.forget(container_tag=tag, id=memory_id)
+            return
+        except Exception as first_exc:
+            # Explicit-memory writes use documents.add(), which returns a
+            # document id. The v4 memories.forget endpoint expects a memory id,
+            # so immediately forgetting the id returned by supermemory_store can
+            # 404 even though the document exists. Fall back to deleting the
+            # backing document id. This preserves the existing search-result id
+            # path while making store -> forget(id) coherent.
+            status = getattr(first_exc, "status_code", None)
+            msg = str(first_exc).lower()
+            if status != 404 and "not found" not in msg:
+                raise
+
+            last_exc: Exception | None = None
+            for attempt in range(6):
+                try:
+                    self._client.documents.delete(memory_id)
+                    return
+                except Exception as doc_exc:
+                    last_exc = doc_exc
+                    doc_status = getattr(doc_exc, "status_code", None)
+                    doc_msg = str(doc_exc).lower()
+                    conflict = (
+                        doc_status == 409
+                        or "still processing" in doc_msg
+                        or "conflict" in type(doc_exc).__name__.lower()
+                    )
+                    if conflict and attempt < 5:
+                        time.sleep(min(2.0, 0.5 * (attempt + 1)))
+                        continue
+                    if doc_status == 404 or "not found" in doc_msg:
+                        raise first_exc
+                    raise
+            if last_exc:
+                raise last_exc
+            raise first_exc
 
     def forget_by_query(self, query: str, *, container_tag: Optional[str] = None) -> dict:
         results = self.search_memories(query, limit=5, container_tag=container_tag)
@@ -388,7 +442,7 @@ class _SupermemoryClient:
             payload["metadata"] = self._merge_metadata(metadata)
 
         req = urllib.request.Request(
-            _CONVERSATIONS_URL,
+            self._conversation_url,
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {self._api_key}",
